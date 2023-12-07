@@ -2,6 +2,8 @@ import pdb
 import pickle
 import string
 import sys
+from os import listdir
+from os.path import isfile, join
 
 import nltk
 import numpy as np
@@ -9,26 +11,12 @@ from nltk.corpus import stopwords
 
 from utils import (cosine_similarity, process_text)
 
-# nltk.download('stopwords')
-
-# cd embeddings
-# wget https://downloads.cs.stanford.edu/nlp/data/glove.6B.zip
-# unzip -q glove.6B.zip
-
-# en_embeddings_subset = pickle.load(open("embeddings/en_embeddings.p", "rb"))
-
-# en_embeddings = {}
-# with open("embeddings/glove.6B.300d.txt") as f:
-#     for line in f:
-#         word, coefs = line.split(maxsplit=1)
-#         coefs = np.fromstring(coefs, "f", sep=" ")
-#         en_embeddings[word] = coefs
-# pickle.dump(en_embeddings, open("embeddings/glove.6B.300d.p", "wb"))
-
-EMBEDDINGS_FILE = "embeddings/glove.6B.300d.p"
+# en_embeddings = pickle.load(open("data/en_embeddings.p", "rb"))
+EMBEDDINGS_FILE = "data/glove.6B.300d.p"
 en_embeddings = pickle.load(open(EMBEDDINGS_FILE, "rb"))
 
-input_file = sys.argv[1]
+doc_dir = sys.argv[1]
+query = sys.argv[2]
 
 def nearest_neighbor(v, candidates, k=1, cosine_similarity=cosine_similarity):
     """
@@ -55,10 +43,8 @@ def get_document_embedding(text, embeddings, process_text=process_text):
         - doc_embedding: sum of all word embeddings in the tweet
     '''
     doc_embedding = np.zeros(300)
-    print(f"initial word count: {len(text.split())}")
     # process the document into a list of words (process the tweet)
     processed_doc = process_text(text)
-    print(f"word count after processing: {len(processed_doc)}")
     words_with_embeddings = set()
     for word in processed_doc:
         if word not in ['transfer', 'type', 'html', 'utf', 'content', 'text', 'div', 'http', 'www', 'org']:
@@ -67,10 +53,42 @@ def get_document_embedding(text, embeddings, process_text=process_text):
             if isinstance(word_embedding, np.ndarray):
                 words_with_embeddings.add(word)
             doc_embedding += word_embedding
-    print(f"words with embeddings: {' '.join(list(words_with_embeddings))}")
     return doc_embedding
 
-with open(input_file, "r") as f:
-    text = f.read()
+def get_document_vecs(all_docs, en_embeddings, get_document_embedding=get_document_embedding):
+    '''
+    Input:
+        - all_docs: list of strings - all documents in our dataset.
+        - en_embeddings: dictionary with words as the keys and their embeddings as the values.
+    Output:
+        - document_vec_matrix: matrix of document embeddings.
+        - ind2Doc_dict: dictionary with indices of docs in vecs as keys and their embeddings as the values.
+    '''
 
-embedding = get_document_embedding(text, en_embeddings)
+    # the dictionary's key is an index (integer) that identifies a specific document
+    # the value is the document embedding for that document
+    ind2Doc_dict = {}
+
+    # this is list that will store the document vectors
+    document_vec_l = []
+
+    for i, doc in enumerate(all_docs):
+        doc_embedding = get_document_embedding(doc, en_embeddings)
+        ind2Doc_dict[i] = doc_embedding
+        document_vec_l.append(doc_embedding)
+
+    # convert the list of document vectors into a 2D array (each row is a document vector)
+    document_vec_matrix = np.vstack(document_vec_l)
+
+    return document_vec_matrix, ind2Doc_dict
+
+doc_files = [join(doc_dir, f) for f in listdir(doc_dir) if isfile(join(doc_dir, f))]
+print(f"loading {len(doc_files)} documents")
+docs = []
+for doc_file in doc_files:
+    with open(doc_file, "r") as f:
+        docs.append(f.read())
+doc_vecs, docs_by_index = get_document_vecs(docs, en_embeddings)
+query_embedding = get_document_embedding(query, en_embeddings)
+idx = np.argmax(cosine_similarity(doc_vecs, query_embedding))
+print(docs[idx])
