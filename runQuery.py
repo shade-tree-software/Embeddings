@@ -57,7 +57,7 @@ def nearest_neighbor(v, candidates, k=1, cosine_similarity=cosine_similarity):
     # sort the similarity list and get the k most similar indices    
     return np.flip(np.argsort(cos_similarities))[:k]
 
-def get_document_embedding(text, embeddings, process_text=process_text):
+def get_document_embedding_verbose(text, embeddings, process_text=process_text):
     '''
     Input:
         - text: a string
@@ -70,13 +70,15 @@ def get_document_embedding(text, embeddings, process_text=process_text):
     processed_doc = process_text(text)
     words_with_embeddings = set()
     for word in processed_doc:
-        if word not in ['transfer', 'type', 'html', 'utf', 'content', 'text', 'div', 'http', 'www', 'org']:
-            # add the word embedding to the running total for the document embedding
-            word_embedding = embeddings.get(word, 0)
-            if isinstance(word_embedding, np.ndarray):
-                words_with_embeddings.add(word)
-            doc_embedding += word_embedding
-    return doc_embedding
+        # add the word embedding to the running total for the document embedding
+        word_embedding = embeddings.get(word, 0)
+        if isinstance(word_embedding, np.ndarray):
+            words_with_embeddings.add(word)
+        doc_embedding += word_embedding
+    return doc_embedding, words_with_embeddings, processed_doc
+
+def get_document_embedding(text, embeddings, process_text=process_text):
+    return get_document_embedding_verbose(text, embeddings, process_text)[0]
 
 def get_document_vecs(all_docs, embeddings, get_document_embedding=get_document_embedding):
     '''
@@ -131,7 +133,8 @@ if not docs or not doc_vecs:
 if doc_vecs["type"] == "local":
     if not local_embeddings:
         local_embeddings = pickle.load(open(EMBEDDINGS_PICKLE, "rb"))
-    query_embedding = get_document_embedding(query, local_embeddings)
+    query_embedding, words_with_embeddings, _ = get_document_embedding_verbose(query, local_embeddings)
+    print(f"Query words: {words_with_embeddings}")
 elif doc_vecs["type"] == "Google":
     print("Requesting query text embedding from Google")
     model = TextEmbeddingModel.from_pretrained("textembedding-gecko")
@@ -140,8 +143,15 @@ else:
     print("unknown embeddings type")
     exit(0)
 
+# print best match
 idx = np.argmax(cosine_similarity(doc_vecs["values"], query_embedding))
-print(f"Best match:\n{docs[idx]}")
+print(f"Best document match for query text:\n{docs[idx]}")
+if local_embeddings:
+    print("Words from document that have embeddings:")
+    print(get_document_embedding_verbose(docs[idx], local_embeddings)[1])
+else:
+    print("Cleaned words from document:")
+    print(set(process_text(docs[idx])))
 
 if docs_jsonl:
     print(f"Generating docs and embeddings pickle files")

@@ -18,6 +18,7 @@ for current_dir, subdirs, files in os.walk(input_dir):
             msg = parser.parse(f)
         text = ""
         if len(msg.keys()):
+            text = f"{msg["Subject"]} " 
             for part in msg.walk():
                 content_type = part.get_content_type()
                 if content_type == 'text/plain':
@@ -27,7 +28,7 @@ for current_dir, subdirs, files in os.walk(input_dir):
                         text += html2text.html2text(part.as_string())
                     except AssertionError:
                         continue
-        text = ' '.join(list(set(re.findall(r'\b[a-zA-Z\']+\b', text))))
+        text = ' '.join(re.findall(r'\b\w+\b', text))
         if len(text) > 0:
             output_file = os.path.join(output_dir, f"{index}.txt")
             with open(output_file, "w") as f:
