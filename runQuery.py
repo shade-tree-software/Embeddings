@@ -25,21 +25,12 @@ from utils import (cosine_similarity, process_text)
 # If a JSONL file is not specified, documents and embeddings are loaded from
 # pickle files.
 
-DOCS_PICKLE = "data/docs.p"
-DOC_VECS_PICKLE = "data/docVecs.p"
-EMBEDDINGS_PICKLE = "data/glove.6B.300d.p"
-# EMBEDDINGS_PICKLE = "data/local_embeddings.p"
-
-local_embeddings = None
-docs = None
-doc_vecs = None
-docs_jsonl = None
-query = sys.argv[1]
-if (len(sys.argv) == 3):
-    docs_jsonl = sys.argv[2]
-else:
-    docs = pickle.load(open(DOCS_PICKLE, "rb"))
-    doc_vecs = pickle.load(open(DOC_VECS_PICKLE, "rb"))
+LOCAL_DOCS_PICKLE = "data/docs_local.p"
+GOOGLE_DOCS_PICKLE = "data/docs_google.p"
+LOCAL_DOC_VECS_PICKLE = "data/docVecs_local.p"
+GOOGLE_DOC_VECS_PICKLE = "data/docVecs_google.p"
+LOCAL_WORD_VECS_PICKLE = "data/glove.6B.300d.p"
+# LOCAL_WORD_VECS_PICKLE = "data/local_word_vecs.p"
 
 def nearest_neighbor(v, candidates, k=1, cosine_similarity=cosine_similarity):
     """
@@ -105,10 +96,16 @@ def get_document_vecs(all_docs, embeddings, get_document_embedding=get_document_
     # convert the list of document vectors into a 2D array (each row is a document vector)
     document_vec_matrix = np.vstack(document_vec_l)
 
-    return {"type":"local", "values":document_vec_matrix}, ind2Doc_dict
+    return document_vec_matrix, ind2Doc_dict
 
-# load documents and embeddings.  If no embeddings, generate them locally
-if not docs or not doc_vecs:
+# Load data based on command line options
+local_word_vecs = None
+query = sys.argv[1]
+try:
+    docs_jsonl = sys.argv[sys.argv.index("-j") + 1]
+except:
+    docs_jsonl = None
+if docs_jsonl:
     with open(docs_jsonl, "r") as f:
         docs_info = [json.loads(doc_info) for doc_info in f.readlines()]
     if "instance" in docs_info[0] and "predictions" in docs_info[0]:
@@ -117,44 +114,72 @@ if not docs or not doc_vecs:
         for doc_info in docs_info:
             docs.append(doc_info["instance"]["content"])
             doc_vecs_l.append(doc_info["predictions"][0]["embeddings"]["values"])
-        doc_vecs = {"type":"Google", "values":np.vstack(doc_vecs_l)}
+        doc_vecs = np.vstack(doc_vecs_l)
         print(f"Loaded {len(docs)} docs and embeddings from {docs_jsonl}")
     elif "content" in docs_info[0]:
         docs = [doc_info["content"] for doc_info in docs_info]
         print(f"Loaded {len(docs)} docs from {docs_jsonl}.  No embeddings found.  Generating all embeddings locally.")
-        if not local_embeddings:
-            local_embeddings = pickle.load(open(EMBEDDINGS_PICKLE, "rb"))
-        doc_vecs, _ = get_document_vecs(docs, local_embeddings)
+        local_word_vecs = pickle.load(open(LOCAL_WORD_VECS_PICKLE, "rb"))
+        doc_vecs, _ = get_document_vecs(docs, local_word_vecs)
     else:
         print("could not read input file")
         exit(0)
+else:
+    if "-g" in sys.argv:
+        try:
+            docs = pickle.load(open(GOOGLE_DOCS_PICKLE, "rb"))
+        except:
+            print("No JSONL file specified and cannot find docs pickle file")
+            exit(0)
+        try:
+            doc_vecs = pickle.load(open(GOOGLE_DOC_VECS_PICKLE, "rb"))
+        except:
+            print("Google option specified but cannot find Google doc embeddings pickle file")
+            exit(0)
+    else:
+        try:
+            docs = pickle.load(open(LOCAL_DOCS_PICKLE, "rb"))
+        except:
+            print("No JSONL file specified and cannot find docs pickle file")
+            exit(0)
+        try:
+            doc_vecs = pickle.load(open(LOCAL_DOC_VECS_PICKLE, "rb"))
+        except:
+            print("No JSONL file specified and cannot find local doc embeddings pickle file")
+            exit(0)
+        try:
+            local_word_vecs = pickle.load(open(LOCAL_WORD_VECS_PICKLE, "rb"))
+        except:
+            print("Cannot find local word embeddings pickle file")
+            exit(0)
 
 # generate embeddings for query text
-if doc_vecs["type"] == "local":
-    if not local_embeddings:
-        local_embeddings = pickle.load(open(EMBEDDINGS_PICKLE, "rb"))
-    query_embedding, words_with_embeddings, _ = get_document_embedding_verbose(query, local_embeddings)
+if local_word_vecs:
+    query_embedding, words_with_embeddings, _ = get_document_embedding_verbose(query, local_word_vecs)
     print(f"Query words: {words_with_embeddings}")
-elif doc_vecs["type"] == "Google":
+else:
     print("Requesting query text embedding from Google")
     model = TextEmbeddingModel.from_pretrained("textembedding-gecko")
     query_embedding = model.get_embeddings([query])[0].values
-else:
-    print("unknown embeddings type")
-    exit(0)
 
 # print best match
-idx = np.argmax(cosine_similarity(doc_vecs["values"], query_embedding))
+idx = np.argmax(cosine_similarity(doc_vecs, query_embedding))
 print(f"Best document match for query text:\n{docs[idx]}")
-if local_embeddings:
+if local_word_vecs:
     print("Words from document that have embeddings:")
-    print(get_document_embedding_verbose(docs[idx], local_embeddings)[1])
+    print(get_document_embedding_verbose(docs[idx], local_word_vecs)[1])
 else:
     print("Cleaned words from document:")
     print(set(process_text(docs[idx])))
 
 if docs_jsonl:
-    print(f"Generating docs and embeddings pickle files")
-    pickle.dump(docs, open(DOCS_PICKLE, "wb"))
-    pickle.dump(doc_vecs, open(DOC_VECS_PICKLE, "wb"))
+    print(f"Saving docs as pickle file")
+    if local_word_vecs:
+        pickle.dump(docs, open(LOCAL_DOCS_PICKLE, "wb"))
+        print(f"Saving local doc embeddings as pickle file")
+        pickle.dump(doc_vecs, open(LOCAL_DOC_VECS_PICKLE, "wb"))
+    else:
+        pickle.dump(docs, open(GOOGLE_DOCS_PICKLE, "wb"))
+        print(f"Saving Google doc embeddings as pickle file")
+        pickle.dump(doc_vecs, open(GOOGLE_DOC_VECS_PICKLE, "wb"))
 
