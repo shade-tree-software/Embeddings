@@ -31,20 +31,24 @@ LOCAL_DOC_VECS_PICKLE = "data/docVecs_local.p"
 GOOGLE_DOC_VECS_PICKLE = "data/docVecs_google.p"
 LOCAL_WORD_VECS_PICKLE = "data/glove.6B.300d.p"
 # LOCAL_WORD_VECS_PICKLE = "data/local_word_vecs.p"
+GOOGLE_ANN_DATA_PICKLE = "data/annData_google.p"
+LOCAL_ANN_DATA_PICKLE = "data/annData_local.p"
+N_VECS_PER_BUCKET = 16
+N_UNIVERSES = 25
 
-def nearest_neighbor(v, candidates, k=1, cosine_similarity=cosine_similarity):
+def nearest_neighbor(query_vec, document_vectors, k=1, cosine_similarity=cosine_similarity):
     """
     Input:
-      - v, the vector you are going find the nearest neighbor for
-      - candidates: a set of vectors where we will find the neighbors
+      - query_vec, the vector you are going find the nearest neighbor for
+      - document_vectors: a set of vectors where we will find the neighbors
       - k: top k nearest neighbors to find
     Output:
-      - the indices of the top k closest vectors
+      - the top k closest vectors
     """
     cos_similarities = []
     # get cosine similarity of input vector v and each candidate vector
-    for candidate in candidates:
-        cos_similarities.append(cosine_similarity(v, candidate))
+    for doc_vec in document_vectors:
+        cos_similarities.append(cosine_similarity(np.array(query_vec), np.array(doc_vec)))
     # sort the similarity list and get the k most similar indices    
     return np.flip(np.argsort(cos_similarities))[:k]
 
@@ -97,6 +101,119 @@ def get_document_vecs(all_docs, embeddings, get_document_embedding=get_document_
     document_vec_matrix = np.vstack(document_vec_l)
 
     return document_vec_matrix, ind2Doc_dict
+
+def hash_value_of_vector(v, planes):
+    """Create a hash for a vector based on whether the vector falls on the positive
+       or negative side of each plane.
+    Input:
+        - v:  vector of document. Its dimension is (1, N_DIMS)
+        - planes: matrix of dimension (N_DIMS, N_PLANES) - the set of planes that divide up the region
+    Output:
+        - returns: hash of vector
+
+    """
+    # for the set of planes,
+    # calculate the dot product between the vector and the matrix containing the planes
+    # The dot product will have the shape (1, N_PLANES)    
+    dot_product = np.dot(v, planes)
+
+    # Return an integer where each bit represents whether the dot product in the
+    # corresponding plane was positive or negative.
+    return int((2 ** (np.where(dot_product.squeeze() >= 0)[0])).sum())
+
+def make_hash_table(vecs, planes, hash_value_of_vector=hash_value_of_vector):
+    """
+    Input:
+        - vecs: list of vectors to be hashed.
+        - planes: the matrix of planes in a single "universe", with shape (embedding dimensions, number of planes).
+    Output:
+        - hash_table: dictionary - keys are hashes, values are lists of vectors (hash buckets)
+        - id_table: dictionary - keys are hashes, values are list of vectors id's
+                            (it's used to know which doc corresponds to the hashed vector)
+    """
+    # number of planes is the number of columns in the planes matrix
+    num_of_planes = planes.shape[1]
+
+    # number of buckets is 2^(number of planes)
+    num_buckets = 2**num_of_planes
+
+    # create the hash table as a dictionary.
+    # Keys are integers (0,1,2.. number of buckets)
+    # Values are empty lists
+    hash_table = {i: [] for i in range(num_buckets)}
+
+    # create the id table as a dictionary.
+    # Keys are integers (0,1,2... number of buckets)
+    # Values are empty lists
+    id_table = {i: [] for i in range(num_buckets)}
+
+    for i, v in enumerate(vecs):
+        h = hash_value_of_vector(v, planes)
+
+        # store the vector into hash_table at key h,
+        # by appending the vector v to the list at key h
+        hash_table[h].append(v) 
+
+        # store the vector's index 'i' (each document is given a unique integer 0,1,2...)
+        # the key is the h, and the 'i' is appended to the list at key h
+        id_table[h].append(i) 
+
+    return hash_table, id_table
+
+def create_hash_id_tables(planes_l, document_vecs):
+    hash_tables = []
+    id_tables = []
+    n_universes = len(planes_l)
+    for universe_id in range(n_universes):  # there are 25 hashes
+        print('working on hash universe #:', universe_id)
+        planes = planes_l[universe_id]
+        hash_table, id_table = make_hash_table(document_vecs, planes)
+        hash_tables.append(hash_table)
+        id_tables.append(id_table)
+    
+    return hash_tables, id_tables
+
+def approximate_knn(query_vec, planes_l, hash_tables, id_tables, k=1,
+                    num_universes_to_use=N_UNIVERSES, hash_value_of_vector=hash_value_of_vector):
+    assert num_universes_to_use <= N_UNIVERSES
+    vecs_to_consider_l = list() # Vectors to check for possible nearest neighbor
+    ids_to_consider_l = list() # list of document IDs
+
+    # create a set of ids to consider, for faster checking if a document ID already exists in the set
+    ids_to_consider_set = set()
+
+    for universe_id in range(num_universes_to_use):
+        planes = planes_l[universe_id] # get planes for this universe
+        hash_value = hash_value_of_vector(query_vec, planes) # get the bucket in which the query resides
+        document_vectors_l = hash_tables[universe_id][hash_value] # get docs from this bucket
+        new_ids_to_consider = id_tables[universe_id][hash_value] # get docs ids from this bucket
+
+        # loop through the subset of document vectors to consider
+        for i, new_id in enumerate(new_ids_to_consider):
+            # if the document ID is not yet in the set ids_to_consider...
+            if new_id not in ids_to_consider_set:
+                # access document_vectors_l list at index i to get the embedding
+                # then append it to the list of vectors to consider as possible nearest neighbors
+                document_vector_at_i = document_vectors_l[i]
+                vecs_to_consider_l.append(document_vector_at_i)
+
+                # append the new_id (the index for the document) to the list of ids to consider
+                ids_to_consider_l.append(new_id)
+
+                # also add the new_id to the set of ids to consider
+                # (use this to check if new_id is not already in the IDs to consider)
+                ids_to_consider_set.add(new_id)
+
+    # Now run k-NN on the smaller set of vecs-to-consider.
+    print("Fast considering %d vecs" % len(vecs_to_consider_l))
+    nearest_neighbor_idx_l = nearest_neighbor(query_vec, vecs_to_consider_l, k=k)
+
+    # Use the nearest neighbor index list as indices into the ids to consider
+    # create a list of nearest neighbors by the document ids
+    nearest_neighbor_ids = [ids_to_consider_l[idx]
+                            for idx in nearest_neighbor_idx_l]
+
+    return nearest_neighbor_ids
 
 # Load data based on command line options
 local_word_vecs = None
@@ -155,15 +272,45 @@ else:
 
 # generate embeddings for query text
 if local_word_vecs:
-    query_embedding, words_with_embeddings, _ = get_document_embedding_verbose(query, local_word_vecs)
+    query_vec, words_with_embeddings, _ = get_document_embedding_verbose(query, local_word_vecs)
     print(f"Query words: {words_with_embeddings}")
 else:
     print("Requesting query text embedding from Google")
     model = TextEmbeddingModel.from_pretrained("textembedding-gecko")
-    query_embedding = model.get_embeddings([query])[0].values
+    query_vec = model.get_embeddings([query])[0].values
 
-# print best match
-idx = np.argmax(cosine_similarity(doc_vecs, query_embedding))
+# Get best match using brute force approach
+# idx = np.argmax(cosine_similarity(doc_vecs, query_vec))
+
+# Get best match using approximate nearest neighbors approach
+if docs_jsonl:
+    n_docs = len(docs)
+    n_dims = len(query_vec)
+    n_buckets = np.ceil(n_docs / N_VECS_PER_BUCKET)
+    n_planes = int(np.ceil(np.log2(n_buckets)))
+    planes_l = [np.random.normal(size=(n_dims, n_planes)) for _ in range(N_UNIVERSES)]
+    hash_tables, id_tables = create_hash_id_tables(planes_l, doc_vecs)
+    annData = {
+        "planes_l": planes_l,
+        "hash_tables": hash_tables,
+        "id_tables": id_tables
+    }
+    if local_word_vecs:
+        pickle.dump(annData, open(LOCAL_ANN_DATA_PICKLE, "wb"))
+    else:
+        pickle.dump(annData, open(GOOGLE_ANN_DATA_PICKLE, "wb"))
+else:
+    if local_word_vecs:
+        annData = pickle.load(open(LOCAL_ANN_DATA_PICKLE, "rb"))
+    else:
+        annData = pickle.load(open(GOOGLE_ANN_DATA_PICKLE, "rb"))
+nearest_neighbor_ids = approximate_knn(query_vec, 
+                                       annData["planes_l"],
+                                       annData["hash_tables"],
+                                       annData["id_tables"],
+                                       k=1, num_universes_to_use=10)
+idx = nearest_neighbor_ids[0]
+
 print(f"Best document match for query text:\n{docs[idx]}")
 if local_word_vecs:
     print("Words from document that have embeddings:")
