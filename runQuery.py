@@ -173,7 +173,7 @@ def create_hash_id_tables(planes_l, document_vecs):
     
     return hash_tables, id_tables
 
-def approximate_knn(query_vec, planes_l, hash_tables, id_tables, k=1,
+def approximate_knn(query_vec, planes_l, hash_tables, id_tables, k=1, n_docs=None,
                     num_universes_to_use=N_UNIVERSES, hash_value_of_vector=hash_value_of_vector):
     assert num_universes_to_use <= N_UNIVERSES
     vecs_to_consider_l = list() # Vectors to check for possible nearest neighbor
@@ -205,7 +205,10 @@ def approximate_knn(query_vec, planes_l, hash_tables, id_tables, k=1,
                 ids_to_consider_set.add(new_id)
 
     # Now run k-NN on the smaller set of vecs-to-consider.
-    print("Fast considering %d vecs" % len(vecs_to_consider_l))
+    if (n_docs):
+        print(f"Fast considering {len(vecs_to_consider_l)} vecs out of {n_docs} total")
+    else:
+        print(f"Fast considering {len(vecs_to_consider_l)} vecs")
     nearest_neighbor_idx_l = nearest_neighbor(query_vec, vecs_to_consider_l, k=k)
 
     # Use the nearest neighbor index list as indices into the ids to consider
@@ -222,6 +225,10 @@ try:
     docs_jsonl = sys.argv[sys.argv.index("-j") + 1]
 except:
     docs_jsonl = None
+try:
+    k = int(sys.argv[sys.argv.index("-k") + 1])
+except:
+    k = 1
 if docs_jsonl:
     with open(docs_jsonl, "r") as f:
         docs_info = [json.loads(doc_info) for doc_info in f.readlines()]
@@ -284,9 +291,8 @@ else:
 
 # Get best match using approximate nearest neighbors approach
 if docs_jsonl:
-    n_docs = len(docs)
     n_dims = len(query_vec)
-    n_buckets = np.ceil(n_docs / N_VECS_PER_BUCKET)
+    n_buckets = np.ceil(len(docs) / N_VECS_PER_BUCKET)
     n_planes = int(np.ceil(np.log2(n_buckets)))
     planes_l = [np.random.normal(size=(n_dims, n_planes)) for _ in range(N_UNIVERSES)]
     hash_tables, id_tables = create_hash_id_tables(planes_l, doc_vecs)
@@ -308,16 +314,11 @@ nearest_neighbor_ids = approximate_knn(query_vec,
                                        annData["planes_l"],
                                        annData["hash_tables"],
                                        annData["id_tables"],
-                                       k=1, num_universes_to_use=10)
-idx = nearest_neighbor_ids[0]
+                                       k, num_universes_to_use=10, n_docs=len(docs))
 
-print(f"Best document match for query text:\n{docs[idx]}")
-if local_word_vecs:
-    print("Words from document that have embeddings:")
-    print(get_document_embedding_verbose(docs[idx], local_word_vecs)[1])
-else:
-    print("Cleaned words from document:")
-    print(set(process_text(docs[idx])))
+print(f"Best document matches:")
+for i in nearest_neighbor_ids:
+    print(f"\n   {docs[i]}\n")
 
 if docs_jsonl:
     print(f"Saving docs as pickle file")
