@@ -7,8 +7,6 @@ from os.path import isfile, join
 import numpy as np
 import json
 
-from vertexai.preview.language_models import TextEmbeddingModel
-
 from utils import (cosine_similarity, process_text)
 
 # Match query text with the document that has the closest embedding.
@@ -32,7 +30,7 @@ GOOGLE_DOC_VECS_PICKLE = "data/docVecs_google.p"
 LOCAL_WORD_VECS_PICKLE = "data/glove.840B.300d.p"
 # LOCAL_WORD_VECS_PICKLE = "data/glove.6B.300d.p"
 # LOCAL_WORD_VECS_PICKLE = "data/local_word_vecs.p"
-GOOGLE_ANN_DATA_PICKLE = "data/annData_google.p"
+GOOGLE_ANN_DATA_PICKLE = "data/annDatNotImplementedErrora_google.p"
 LOCAL_ANN_DATA_PICKLE = "data/annData_local.p"
 N_VECS_PER_BUCKET = 16
 N_UNIVERSES = 25
@@ -284,6 +282,7 @@ if local_word_vecs:
     print(f"Query words: {words_with_embeddings}")
 else:
     print("Requesting query text embedding from Google")
+    from vertexai.preview.language_models import TextEmbeddingModel
     model = TextEmbeddingModel.from_pretrained("textembedding-gecko")
     query_vec = model.get_embeddings([query])[0].values
 

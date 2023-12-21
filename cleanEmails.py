@@ -31,10 +31,14 @@ for current_dir, subdirs, files in os.walk(input_dir):
                         text += html2text.html2text(part.as_string())
                     except AssertionError:
                         continue
+                    except NotImplementedError:
+                        continue
         if len(text) > 0:
             text = simplify_text(text, create_summary)
             if text:
                 output_file = os.path.join(output_dir, f"{index}.txt")
+                print(output_file)
+                print(f"{text}\n")
                 with open(output_file, "w") as f:
                     f.write(text)
                 index += 1
